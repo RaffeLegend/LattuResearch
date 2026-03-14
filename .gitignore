@@ -1,3 +1,6 @@
+# Config with secrets (use config.yaml.example as template)
+config.yaml
+
 # Node
 node_modules/
 

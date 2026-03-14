@@ -40,17 +40,27 @@ usage() {
 
 # ─── 环境检查 ─────────────────────────────
 check_env() {
+    # 检查环境变量或 config.yaml 中是否配置了 key
     if [ -z "$ANTHROPIC_API_KEY" ]; then
-        echo -e "${YELLOW}[warn]${NC} ANTHROPIC_API_KEY 未设置"
-        echo "  请运行: export ANTHROPIC_API_KEY='your-key'"
-        exit 1
+        if grep -q 'anthropic_api_key: "sk-' "$ROOT/config.yaml" 2>/dev/null; then
+            echo -e "${GREEN}[ok]${NC} ANTHROPIC_API_KEY 已在 config.yaml 中配置"
+        else
+            echo -e "${YELLOW}[warn]${NC} ANTHROPIC_API_KEY 未设置"
+            echo "  请设置环境变量或在 config.yaml 中配置 anthropic_api_key"
+            exit 1
+        fi
+    else
+        echo -e "${GREEN}[ok]${NC} ANTHROPIC_API_KEY 已设置（环境变量）"
     fi
-    echo -e "${GREEN}[ok]${NC} ANTHROPIC_API_KEY 已设置"
 
     if [ -z "$OPENAI_API_KEY" ]; then
-        echo -e "${YELLOW}[info]${NC} OPENAI_API_KEY 未设置，embedding 将使用本地模型"
+        if grep -q 'openai_api_key: "sk-' "$ROOT/config.yaml" 2>/dev/null; then
+            echo -e "${GREEN}[ok]${NC} OPENAI_API_KEY 已在 config.yaml 中配置"
+        else
+            echo -e "${YELLOW}[info]${NC} OPENAI_API_KEY 未设置，embedding 将使用本地模型"
+        fi
     else
-        echo -e "${GREEN}[ok]${NC} OPENAI_API_KEY 已设置"
+        echo -e "${GREEN}[ok]${NC} OPENAI_API_KEY 已设置（环境变量）"
     fi
 }
 
