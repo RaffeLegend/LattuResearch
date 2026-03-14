@@ -1,3 +1,12 @@
+# Node
+node_modules/
+
+# Paper Radar runtime
+storage/papers.db
+storage/pdfs/
+storage/vectors/
+output/reports/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
