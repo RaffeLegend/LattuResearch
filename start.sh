@@ -42,7 +42,13 @@ usage() {
 check_env() {
     # 检查环境变量或 config.yaml 中是否配置了 key
     if [ -z "$ANTHROPIC_API_KEY" ]; then
-        if grep -q 'anthropic_api_key: "sk-' "$ROOT/config.yaml" 2>/dev/null; then
+        # 检查 config.yaml 中 anthropic_api_key 是否为非空字符串
+        if python3 -c "
+import yaml
+c = yaml.safe_load(open('$ROOT/config.yaml'))
+k = c.get('anthropic_api_key', '')
+exit(0 if k and len(str(k)) > 5 else 1)
+" 2>/dev/null; then
             echo -e "${GREEN}[ok]${NC} ANTHROPIC_API_KEY 已在 config.yaml 中配置"
         else
             echo -e "${YELLOW}[warn]${NC} ANTHROPIC_API_KEY 未设置"
@@ -54,7 +60,12 @@ check_env() {
     fi
 
     if [ -z "$OPENAI_API_KEY" ]; then
-        if grep -q 'openai_api_key: "sk-' "$ROOT/config.yaml" 2>/dev/null; then
+        if python3 -c "
+import yaml
+c = yaml.safe_load(open('$ROOT/config.yaml'))
+k = c.get('openai_api_key', '')
+exit(0 if k and len(str(k)) > 5 else 1)
+" 2>/dev/null; then
             echo -e "${GREEN}[ok]${NC} OPENAI_API_KEY 已在 config.yaml 中配置"
         else
             echo -e "${YELLOW}[info]${NC} OPENAI_API_KEY 未设置，embedding 将使用本地模型"
@@ -88,6 +99,16 @@ cmd_run() {
 cmd_web() {
     check_env
     echo -e "${CYAN}[start]${NC} 启动 Web UI..."
+
+    # 清理已占用的端口
+    for port in 8000 3000; do
+        pid=$(lsof -ti:$port 2>/dev/null || true)
+        if [ -n "$pid" ]; then
+            echo -e "${YELLOW}[clean]${NC} 端口 $port 被占用，正在释放..."
+            kill -9 $pid 2>/dev/null || true
+            sleep 1
+        fi
+    done
 
     # 启动后端
     echo -e "${GREEN}[api]${NC} 后端启动中 → http://localhost:8000"
