@@ -242,19 +242,21 @@ blind_spot_discovery:
 idea_generation:
   system: |
     You are a creative research advisor helping generate novel, feasible research ideas.
-    You will be given a list of research blind spots and a summary of existing methods
-    in a field.
+    You will be given the top-rated papers in a field, their methods, limitations,
+    and the research sub-directions.
 
-    Your task is to generate concrete research ideas that address these blind spots.
+    Your task is to generate concrete research ideas inspired by these strong papers —
+    building on their strengths, combining their approaches, or addressing their
+    stated limitations.
 
     A good research idea must be:
     - SPECIFIC: Describes a concrete problem and approach, not a vague direction
     - NOVEL: Clearly differentiated from existing work cited
     - FEASIBLE: Achievable with current tools and reasonable compute
-    - IMPACTFUL: Addresses a real limitation in the field
+    - IMPACTFUL: Extends or improves upon the best recent work
 
     Rules:
-    - Ground each idea in specific existing work (name actual papers/methods).
+    - Ground each idea in specific existing papers (name actual papers/methods).
     - Each idea should have a clear experimental validation path.
     - Be honest about risks and challenges.
     - Output valid JSON only.
@@ -262,22 +264,19 @@ idea_generation:
   user: |
     Field: {topic}
 
-    Research Blind Spots Identified:
-    {blind_spots}
+    Top Papers (ranked by novelty score, with their contributions and limitations):
+    {top_papers_detail}
 
-    Existing Methods Summary (by sub-field):
+    Research Sub-directions:
     {methods_summary}
 
-    Notable Papers for Reference:
-    {notable_papers}
-
-    Generate 3-5 research ideas. Return a JSON object:
+    Generate 3-5 research ideas inspired by these top papers. Return a JSON object:
     {{
       "ideas": [
         {{
           "title": "Descriptive title of the research idea",
           "problem_statement": "What specific problem does this solve?",
-          "addresses_blind_spot": "Which blind spot from above does this address?",
+          "addresses_blind_spot": "Which limitation or gap from the top papers does this address?",
           "proposed_approach": "Concrete technical approach (2-3 sentences)",
           "key_hypothesis": "The central hypothesis that needs to be validated",
           "related_work": ["paper or method 1", "paper or method 2"],
@@ -317,9 +316,6 @@ report_generation:
     Trend Analysis Data:
     {trend_data}
 
-    Blind Spots Data:
-    {blind_spots_data}
-
     Research Ideas Data:
     {ideas_data}
 
@@ -331,7 +327,7 @@ report_generation:
     # {topic} Research Landscape Report
     **Period**: {time_range} | **Papers Analyzed**: {paper_count} | **Generated**: {date}
 
-    ## 📌 Key Takeaways
+    ## Key Takeaways
     (3-5 bullet points for busy readers)
 
     ## Overview
@@ -343,11 +339,8 @@ report_generation:
     ## Trend Analysis
     (Prose analysis of hot/declining/emerging directions)
 
-    ## Research Blind Spots
-    (For each blind spot: description, evidence, why it matters)
-
     ## Research Ideas
-    (For each idea: problem, approach, novelty, risks)
+    (For each idea: problem, approach, novelty, risks — inspired by top papers)
 
     ## Notable Papers
     (Table: title | venue | novelty score | key contribution)

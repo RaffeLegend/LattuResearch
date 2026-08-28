@@ -321,15 +321,20 @@ def enrich_with_semantic_scholar(papers):
     """批量查询 Semantic Scholar，添加 venue 和引用信息"""
     enriched = {}
     total = len(papers)
+    found = 0
+    venue_found = 0
 
     for i, (pid, paper) in enumerate(papers.items()):
         ss_data = query_semantic_scholar(pid, paper["title"])
         if ss_data:
-            paper["venue"] = ss_data.get("venue", "")
+            found += 1
+            paper["venue"] = ss_data.get("venue", "") or ""
             paper["citation_count"] = ss_data.get("citationCount", 0) or 0
             paper["citation_velocity"] = calc_citation_velocity(
                 paper["citation_count"], paper["published_date"]
             )
+            if paper["venue"]:
+                venue_found += 1
         else:
             paper["venue"] = ""
             paper["citation_count"] = 0
@@ -343,12 +348,18 @@ def enrich_with_semantic_scholar(papers):
         # 尊重速率限制
         time.sleep(0.5)
 
-    print(f"[collector] ✓ Semantic Scholar 查询完成")
+    print(f"[collector] ✓ Semantic Scholar 查询完成: {found}/{total} 找到, {venue_found} 有 venue")
     return enriched
 
 
 def filter_papers(papers, config, venues_category):
-    """按顶会白名单和 citation velocity 过滤"""
+    """按顶会白名单和 citation velocity 过滤
+
+    三条通道（满足任一即保留）：
+    1. venue 匹配顶会白名单
+    2. citation_velocity >= 阈值（近 180 天论文）
+    3. 近 14 天内的新论文（Semantic Scholar 尚未索引，给予宽限）
+    """
     venues_config = config.get("venues", {})
     threshold = config["collection"]["citation_velocity_threshold"]
     max_days = config["collection"]["max_days_for_velocity"]
@@ -359,38 +370,59 @@ def filter_papers(papers, config, venues_category):
         whitelist.extend(venues_config[venues_category])
     if venues_category != "ai_general" and "ai_general" in venues_config:
         whitelist.extend(venues_config["ai_general"])
+    # 也合并所有其他领域（跨领域论文可能发在不同方向的会议）
+    for cat, venues in venues_config.items():
+        for v in venues:
+            if v not in whitelist:
+                whitelist.append(v)
     whitelist_lower = [v.lower() for v in whitelist]
 
     filtered = {}
+    stats = {"venue": 0, "velocity": 0, "recent": 0, "skipped_no_venue": 0}
+
     for pid, paper in papers.items():
         venue = (paper.get("venue") or "").strip()
         venue_match = any(wv in venue.lower() for wv in whitelist_lower) if venue else False
 
         pub_date = paper.get("published_date", "")
         velocity = paper.get("citation_velocity", 0.0)
+        citation_count = paper.get("citation_count", 0)
         days_since = 999
         if pub_date:
             try:
                 days_since = (datetime.now() - datetime.strptime(pub_date, "%Y-%m-%d")).days
             except ValueError:
                 pass
+
         velocity_match = velocity >= threshold and days_since <= max_days
+
+        # 近 14 天的新论文：Semantic Scholar 可能还没索引，给宽限
+        is_very_recent = days_since <= 14
 
         if venue_match and velocity_match:
             paper["passed_by"] = "venue+velocity"
+            stats["venue"] += 1
+            stats["velocity"] += 1
         elif venue_match:
             paper["passed_by"] = "venue"
+            stats["venue"] += 1
         elif velocity_match:
             paper["passed_by"] = "velocity"
+            stats["velocity"] += 1
+        elif is_very_recent:
+            paper["passed_by"] = "recent"
+            stats["recent"] += 1
         else:
+            if not venue:
+                stats["skipped_no_venue"] += 1
             continue
 
         filtered[pid] = paper
 
     print(f"[collector] ✓ 过滤完成: {len(filtered)}/{len(papers)} 篇通过")
-    venue_count = sum(1 for p in filtered.values() if "venue" in p["passed_by"])
-    velocity_count = sum(1 for p in filtered.values() if "velocity" in p["passed_by"])
-    print(f"[collector]   顶会: {venue_count} 篇, 高增速: {velocity_count} 篇")
+    print(f"[collector]   顶会: {stats['venue']}, 高增速: {stats['velocity']}, 近期新论文: {stats['recent']}")
+    if stats["skipped_no_venue"] > 0:
+        print(f"[collector]   注意: {stats['skipped_no_venue']} 篇因无 venue 且不满足其他条件被过滤")
     return filtered
 
 

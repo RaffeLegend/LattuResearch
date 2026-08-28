@@ -136,7 +136,7 @@ def run_trend_analysis(conn, config, prompts, topic):
                 max_tokens=4096,
                 system=prompt_cfg["system"],
                 messages=[{"role": "user", "content": user_msg}],
-                timeout=60,
+                timeout=180,
             )
             text = response.content[0].text.strip()
             if text.startswith("```"):
@@ -146,10 +146,10 @@ def run_trend_analysis(conn, config, prompts, topic):
                 text = text.strip()
             return json.loads(text)
         except Exception as e:
+            print(f"[analyst] 趋势分析第 {attempt+1} 次尝试失败: {e}")
             if attempt < 2:
-                time.sleep(2 ** attempt)
+                time.sleep(2 ** (attempt + 1))
             else:
-                print(f"[analyst] 趋势分析失败: {e}")
                 return {"overall_summary": "Analysis unavailable", "hot_directions": [], "declining_directions": [], "emerging_directions": []}
 
 
@@ -184,11 +184,12 @@ def run_blind_spot_discovery(conn, config, prompts, topic):
     ).fetchall()
     cluster_summaries = "\n".join(f"- {r[0]}: {r[1]}" for r in clusters)
 
+    # 截断输入，避免 prompt 过大
     user_msg = prompt_cfg["user"].format(
         topic=topic,
         paper_count=len(analyses),
-        all_limitations="\n".join(f"- {l}" for l in all_limitations[:100]),
-        all_future_work="\n".join(f"- {f}" for f in all_future_work[:100]),
+        all_limitations="\n".join(f"- {l}" for l in all_limitations[:50]),
+        all_future_work="\n".join(f"- {f}" for f in all_future_work[:50]),
         cluster_summaries=cluster_summaries,
     )
 
@@ -199,7 +200,7 @@ def run_blind_spot_discovery(conn, config, prompts, topic):
                 max_tokens=4096,
                 system=prompt_cfg["system"],
                 messages=[{"role": "user", "content": user_msg}],
-                timeout=60,
+                timeout=180,
             )
             text = response.content[0].text.strip()
             if text.startswith("```"):
@@ -209,15 +210,15 @@ def run_blind_spot_discovery(conn, config, prompts, topic):
                 text = text.strip()
             return json.loads(text)
         except Exception as e:
+            print(f"[analyst] 盲区发现第 {attempt+1} 次尝试失败: {e}")
             if attempt < 2:
-                time.sleep(2 ** attempt)
+                time.sleep(2 ** (attempt + 1))
             else:
-                print(f"[analyst] 盲区发现失败: {e}")
                 return {"blind_spots": []}
 
 
-def run_idea_generation(conn, config, prompts, topic, blind_spots_data):
-    """调用 Claude Sonnet 生成研究 Idea"""
+def run_idea_generation(conn, config, prompts, topic):
+    """调用 Claude Sonnet 基于高分论文生成研究 Idea"""
     client = get_anthropic_client(config)
     model = config["models"]["analysis"]
     prompt_cfg = prompts["idea_generation"]
@@ -233,36 +234,57 @@ def run_idea_generation(conn, config, prompts, topic, blind_spots_data):
         for r in clusters
     )
 
-    # 高分论文
+    # 高分论文（含贡献和局限）
     notable = conn.execute("""
-        SELECT p.title, p.venue, pa.novelty_score, pa.key_contribution
+        SELECT p.title, p.venue, pa.novelty_score, pa.key_contribution,
+               pa.core_method, pa.limitations, pa.future_work_mentioned
         FROM papers p
         JOIN paper_analysis pa ON p.id = pa.paper_id
         WHERE p.status = 'embedded'
         ORDER BY pa.novelty_score DESC
-        LIMIT 10
+        LIMIT 15
     """).fetchall()
 
-    notable_papers = "\n".join(
-        f"- {r[0]} ({r[1] or 'arXiv'}, novelty={r[2]}): {r[3]}"
-        for r in notable
-    )
+    top_papers_detail = ""
+    for r in notable:
+        limitations = ""
+        future_work = ""
+        try:
+            lim_list = json.loads(r[5]) if r[5] else []
+            if lim_list:
+                limitations = "; ".join(str(x) for x in lim_list[:3])
+        except (json.JSONDecodeError, TypeError):
+            pass
+        try:
+            fw_list = json.loads(r[6]) if r[6] else []
+            if fw_list:
+                future_work = "; ".join(str(x) for x in fw_list[:3])
+        except (json.JSONDecodeError, TypeError):
+            pass
+        top_papers_detail += (
+            f"- {r[0]} ({r[1] or 'arXiv'}, novelty={r[2]})\n"
+            f"  Contribution: {r[3]}\n"
+            f"  Method: {r[4]}\n"
+        )
+        if limitations:
+            top_papers_detail += f"  Limitations: {limitations}\n"
+        if future_work:
+            top_papers_detail += f"  Future work: {future_work}\n"
 
     user_msg = prompt_cfg["user"].format(
         topic=topic,
-        blind_spots=json.dumps(blind_spots_data.get("blind_spots", []), indent=2),
+        top_papers_detail=top_papers_detail,
         methods_summary=methods_summary,
-        notable_papers=notable_papers,
     )
 
     for attempt in range(3):
         try:
             response = client.messages.create(
                 model=model,
-                max_tokens=4096,
+                max_tokens=8192,
                 system=prompt_cfg["system"],
                 messages=[{"role": "user", "content": user_msg}],
-                timeout=60,
+                timeout=300,
             )
             text = response.content[0].text.strip()
             if text.startswith("```"):
@@ -272,10 +294,10 @@ def run_idea_generation(conn, config, prompts, topic, blind_spots_data):
                 text = text.strip()
             return json.loads(text)
         except Exception as e:
+            print(f"[analyst] Idea 生成第 {attempt+1} 次尝试失败: {e}")
             if attempt < 2:
-                time.sleep(2 ** attempt)
+                time.sleep(2 ** (attempt + 1))
             else:
-                print(f"[analyst] Idea 生成失败: {e}")
                 return {"ideas": []}
 
 
@@ -310,7 +332,7 @@ def save_ideas(conn, topic, ideas_data):
     print(f"[analyst]   已保存 {len(ideas_data.get('ideas', []))} 个 Idea")
 
 
-def generate_report(config, prompts, topic, trend_data, blind_spots_data, ideas_data, conn):
+def generate_report(config, prompts, topic, trend_data, ideas_data, conn):
     """调用 Claude Sonnet 生成 Markdown 报告"""
     client = get_anthropic_client(config)
     model = config["models"]["analysis"]
@@ -341,7 +363,6 @@ def generate_report(config, prompts, topic, trend_data, blind_spots_data, ideas_
         paper_count=paper_count,
         cluster_count=cluster_count,
         trend_data=json.dumps(trend_data, indent=2),
-        blind_spots_data=json.dumps(blind_spots_data, indent=2),
         ideas_data=json.dumps(ideas_data, indent=2),
         top_papers=top_papers_str,
         date=date,
@@ -354,15 +375,15 @@ def generate_report(config, prompts, topic, trend_data, blind_spots_data, ideas_
                 max_tokens=8192,
                 system=prompt_cfg["system"],
                 messages=[{"role": "user", "content": user_msg}],
-                timeout=120,
+                timeout=300,
             )
             return response.content[0].text.strip()
         except Exception as e:
+            print(f"[analyst] 报告生成第 {attempt+1} 次尝试失败: {e}")
             if attempt < 2:
-                time.sleep(2 ** attempt)
+                time.sleep(2 ** (attempt + 1))
             else:
-                print(f"[analyst] 报告生成失败: {e}")
-                return f"# {topic} Report\n\nReport generation failed."
+                return f"# {topic} Report\n\nReport generation failed: {e}"
 
 
 def save_report(topic, report_md):
@@ -410,18 +431,14 @@ def analyze(conn=None, config=None, prompts=None, progress_callback=None):
     report("running", "正在生成趋势分析...", 20)
     trend_data = run_trend_analysis(conn, config, prompts, topic)
 
-    # Step 3: 盲区发现
-    report("running", "正在发现研究盲区...", 40)
-    blind_spots_data = run_blind_spot_discovery(conn, config, prompts, topic)
-
-    # Step 4: Idea 生成
-    report("running", "正在生成研究 Idea...", 60)
-    ideas_data = run_idea_generation(conn, config, prompts, topic, blind_spots_data)
+    # Step 3: Idea 生成（基于高分论文）
+    report("running", "正在基于高分论文生成研究 Idea...", 50)
+    ideas_data = run_idea_generation(conn, config, prompts, topic)
     save_ideas(conn, topic, ideas_data)
 
-    # Step 5: 报告渲染
-    report("running", "正在生成 Markdown 报告...", 80)
-    report_md = generate_report(config, prompts, topic, trend_data, blind_spots_data, ideas_data, conn)
+    # Step 4: 报告渲染
+    report("running", "正在生成 Markdown 报告...", 75)
+    report_md = generate_report(config, prompts, topic, trend_data, ideas_data, conn)
     report_path = save_report(topic, report_md)
 
     # Step 6: Git Push

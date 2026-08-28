@@ -47,8 +47,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# 全局进度队列
-progress_queues: list[asyncio.Queue] = []
+# 使用线程安全的 queue，而非 asyncio.Queue
+import queue as thread_queue
+
+progress_queues: list[thread_queue.Queue] = []
+progress_queues_lock = threading.Lock()
 pipeline_lock = threading.Lock()
 
 
@@ -60,18 +63,19 @@ def get_db():
 
 
 def broadcast_progress(step, status, message, progress):
-    """广播进度到所有 SSE 客户端"""
+    """广播进度到所有 SSE 客户端（线程安全）"""
     event = {
         "step": step,
         "status": status,
         "message": message,
         "progress": progress,
     }
-    for q in progress_queues:
-        try:
-            q.put_nowait(event)
-        except asyncio.QueueFull:
-            pass
+    with progress_queues_lock:
+        for q in progress_queues:
+            try:
+                q.put_nowait(event)
+            except thread_queue.Full:
+                pass
 
 
 # ─── Request Models ──────────────────────────────
@@ -154,22 +158,31 @@ async def api_upload(
 
 @app.get("/api/progress")
 async def api_progress():
-    """SSE 接口，实时推送 pipeline 进度"""
-    queue = asyncio.Queue(maxsize=100)
-    progress_queues.append(queue)
+    """SSE 接口，实时推送 pipeline 进度（线程安全）"""
+    q = thread_queue.Queue(maxsize=200)
+    with progress_queues_lock:
+        progress_queues.append(q)
 
     async def event_generator():
+        empty_count = 0
         try:
             while True:
-                event = await asyncio.wait_for(queue.get(), timeout=30)
-                yield {"event": "progress", "data": json.dumps(event)}
-        except asyncio.TimeoutError:
-            yield {"event": "ping", "data": "{}"}
+                try:
+                    event = q.get_nowait()
+                    yield {"event": "progress", "data": json.dumps(event)}
+                    empty_count = 0
+                except thread_queue.Empty:
+                    empty_count += 1
+                    if empty_count >= 50:  # ~15 秒发一次 ping
+                        yield {"event": "ping", "data": "{}"}
+                        empty_count = 0
+                    await asyncio.sleep(0.3)
         except asyncio.CancelledError:
             pass
         finally:
-            if queue in progress_queues:
-                progress_queues.remove(queue)
+            with progress_queues_lock:
+                if q in progress_queues:
+                    progress_queues.remove(q)
 
     return EventSourceResponse(event_generator())
 
@@ -251,11 +264,18 @@ async def api_report(topic: str = None):
 
 
 @app.get("/api/report/md")
-async def api_report_md(topic: str = None):
+async def api_report_md(topic: str = None, filename: str = None):
     """返回 Markdown 原文"""
     reports_dir = ROOT / "output" / "reports"
     if not reports_dir.exists():
         raise HTTPException(status_code=404, detail="No reports found")
+
+    # 指定文件名直接返回
+    if filename:
+        report_path = reports_dir / filename
+        if not report_path.exists():
+            raise HTTPException(status_code=404, detail="Report not found")
+        return PlainTextResponse(report_path.read_text(encoding="utf-8"))
 
     # 找最新的报告
     reports = sorted(reports_dir.glob("*.md"), key=lambda p: p.stat().st_mtime, reverse=True)
@@ -267,6 +287,30 @@ async def api_report_md(topic: str = None):
         raise HTTPException(status_code=404, detail="No report found for this topic")
 
     return PlainTextResponse(reports[0].read_text(encoding="utf-8"))
+
+
+@app.get("/api/reports")
+async def api_reports_list():
+    """返回所有历史报告列表"""
+    reports_dir = ROOT / "output" / "reports"
+    if not reports_dir.exists():
+        return []
+
+    reports = sorted(reports_dir.glob("*.md"), key=lambda p: p.stat().st_mtime, reverse=True)
+    result = []
+    for r in reports:
+        name = r.stem  # e.g. "reinforcement-learning_2026-03"
+        parts = name.rsplit("_", 1)
+        topic_name = parts[0].replace("-", " ") if parts else name
+        date = parts[1] if len(parts) > 1 else ""
+        size_kb = r.stat().st_size / 1024
+        result.append({
+            "filename": r.name,
+            "topic": topic_name,
+            "date": date,
+            "size_kb": round(size_kb, 1),
+        })
+    return result
 
 
 @app.get("/api/ideas")

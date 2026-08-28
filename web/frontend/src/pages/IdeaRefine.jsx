@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import { useParams } from 'react-router-dom'
-import ReactMarkdown from 'react-markdown'
+import { usePipeline } from '../PipelineContext'
 import ProgressLog from '../components/ProgressLog'
 
 const cardStyle = {
@@ -12,18 +12,18 @@ const cardStyle = {
 
 export default function IdeaRefine() {
   const { ideaId } = useParams()
+  const { running, logs, pipelineType, startRefine } = usePipeline()
   const [ideas, setIdeas] = useState([])
   const [selectedId, setSelectedId] = useState(ideaId ? Number(ideaId) : null)
   const [refinement, setRefinement] = useState(null)
-  const [logs, setLogs] = useState([])
-  const [running, setRunning] = useState(!!ideaId)
 
   useEffect(() => {
     fetch('/api/ideas').then(r => r.json()).then(setIdeas).catch(console.error)
   }, [])
 
+  // Load refinement when done or on mount
   useEffect(() => {
-    if (selectedId) {
+    if (selectedId && !running) {
       fetch(`/api/refinement/${selectedId}`)
         .then(r => r.ok ? r.json() : null)
         .then(data => { if (data) setRefinement(data) })
@@ -31,32 +31,15 @@ export default function IdeaRefine() {
     }
   }, [selectedId, running])
 
-  const handleRefine = async (id) => {
+  const handleRefine = (id) => {
+    if (running) return
     setSelectedId(id)
-    setRunning(true)
-    setLogs([])
-    await fetch('/api/refine', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ idea_id: id }),
-    })
-  }
-
-  const handleLogEvent = (event) => {
-    setLogs(prev => [...prev, event])
-    if (event.status === 'done' || event.status === 'error') {
-      setRunning(false)
-      // Refresh refinement data
-      if (selectedId) {
-        fetch(`/api/refinement/${selectedId}`)
-          .then(r => r.ok ? r.json() : null)
-          .then(data => { if (data) setRefinement(data) })
-          .catch(() => {})
-      }
-    }
+    setRefinement(null)
+    startRefine(id)
   }
 
   const selectedIdea = ideas.find(i => i.id === selectedId)
+  const isRefining = running && pipelineType === 'refine'
 
   const handleExport = () => {
     if (!refinement?.refinement?.report_md) return
@@ -92,12 +75,12 @@ export default function IdeaRefine() {
                 </div>
                 <button
                   onClick={() => handleRefine(idea.id)}
-                  disabled={idea.refined}
+                  disabled={idea.refined || running}
                   style={{
                     padding: '0.5rem 1rem', flexShrink: 0,
-                    background: idea.refined ? '#334155' : '#3b82f6',
+                    background: idea.refined ? '#334155' : running ? '#475569' : '#3b82f6',
                     color: '#fff', border: 'none', borderRadius: '0.375rem',
-                    cursor: idea.refined ? 'default' : 'pointer', fontSize: '0.85rem',
+                    cursor: idea.refined || running ? 'default' : 'pointer', fontSize: '0.85rem',
                   }}
                 >
                   {idea.refined ? 'Already Refined' : 'Refine'}
@@ -129,17 +112,16 @@ export default function IdeaRefine() {
       )}
 
       {/* Progress */}
-      {running && (
+      {isRefining && (
         <div style={cardStyle}>
           <h2 style={{ fontSize: '1.1rem', marginBottom: '1rem' }}>Refinement Progress</h2>
-          <ProgressLog logs={logs} running={running} onEvent={handleLogEvent} />
+          <ProgressLog logs={logs} running={isRefining} />
         </div>
       )}
 
       {/* Refinement result */}
       {refinement && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-          {/* Closest existing work */}
           {refinement.refinement.closest_existing_work && (
             <div style={cardStyle}>
               <h2 style={{ fontSize: '1.1rem', marginBottom: '1rem' }}>Closest Existing Work</h2>
@@ -154,7 +136,6 @@ export default function IdeaRefine() {
             </div>
           )}
 
-          {/* Detailed sections */}
           <div style={cardStyle}>
             <h2 style={{ fontSize: '1.1rem', marginBottom: '1rem' }}>Overlap Analysis</h2>
             <p style={{ fontSize: '0.9rem', color: '#94a3b8' }}>{refinement.refinement.overlap_analysis}</p>
@@ -203,7 +184,6 @@ export default function IdeaRefine() {
             </ul>
           </div>
 
-          {/* Export */}
           <button
             onClick={handleExport}
             style={{

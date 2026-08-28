@@ -54,8 +54,8 @@ venues:
 
 # 采集配置
 collection:
-  max_papers_per_keyword: 50
-  citation_velocity_threshold: 0.5    # 每天引用数 >= 此值视为高增速
+  max_papers_per_keyword: 20
+  citation_velocity_threshold: 0.1    # 每天引用数 >= 此值视为高增速（0.1 = 每 10 天 1 次引用）
   max_days_for_velocity: 180          # 只对发布 180 天内的论文做增速判断
   max_papers_to_analyze: 50           # 进入全文解析的上限
 

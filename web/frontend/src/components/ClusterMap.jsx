@@ -5,11 +5,12 @@ const shapeForPassedBy = (passedBy) => {
   if (!passedBy) return 'circle'
   if (passedBy.includes('manual')) return 'star'
   if (passedBy.includes('velocity')) return 'triangle'
-  return 'circle' // venue
+  return 'circle'
 }
 
-export default function ClusterMap({ points, clusters, selectedCluster }) {
+export default function ClusterMap({ points, clusters, selectedCluster, onSelectCluster }) {
   const svgRef = useRef(null)
+  const tooltipRef = useRef(null)
 
   useEffect(() => {
     if (!points || points.length === 0) return
@@ -17,8 +18,8 @@ export default function ClusterMap({ points, clusters, selectedCluster }) {
     const svg = d3.select(svgRef.current)
     svg.selectAll('*').remove()
 
-    const width = 600
-    const height = 450
+    const width = 700
+    const height = 500
     const margin = { top: 20, right: 20, bottom: 20, left: 20 }
     const innerW = width - margin.left - margin.right
     const innerH = height - margin.top - margin.bottom
@@ -29,27 +30,75 @@ export default function ClusterMap({ points, clusters, selectedCluster }) {
       .attr('transform', `translate(${margin.left},${margin.top})`)
 
     // Scales
+    const xPad = 0.1
     const xExtent = d3.extent(points, d => d.umap_x)
     const yExtent = d3.extent(points, d => d.umap_y)
-    const x = d3.scaleLinear().domain(xExtent).range([0, innerW]).nice()
-    const y = d3.scaleLinear().domain(yExtent).range([innerH, 0]).nice()
+    const xRange = xExtent[1] - xExtent[0] || 1
+    const yRange = yExtent[1] - yExtent[0] || 1
+    const x = d3.scaleLinear().domain([xExtent[0] - xRange * xPad, xExtent[1] + xRange * xPad]).range([0, innerW])
+    const y = d3.scaleLinear().domain([yExtent[0] - yRange * xPad, yExtent[1] + yRange * xPad]).range([innerH, 0])
 
-    // Color scale by cluster
-    const clusterIds = [...new Set(points.map(d => d.cluster_id))]
+    // Color scale
+    const clusterIds = [...new Set(points.map(d => d.cluster_id))].sort((a, b) => a - b)
     const color = d3.scaleOrdinal(d3.schemeTableau10).domain(clusterIds)
 
+    // Cluster name map
+    const clusterNameMap = {}
+    if (clusters) {
+      clusters.forEach(c => { clusterNameMap[c.id] = c.name })
+    }
+
+    // Compute cluster centroids
+    const centroids = {}
+    clusterIds.forEach(cid => {
+      const cPoints = points.filter(p => p.cluster_id === cid)
+      if (cPoints.length > 0) {
+        centroids[cid] = {
+          x: d3.mean(cPoints, p => p.umap_x),
+          y: d3.mean(cPoints, p => p.umap_y),
+          count: cPoints.length,
+        }
+      }
+    })
+
+    // Draw convex hulls for each cluster (background)
+    clusterIds.forEach(cid => {
+      const cPoints = points.filter(p => p.cluster_id === cid)
+      if (cPoints.length >= 3) {
+        const hullPoints = cPoints.map(p => [x(p.umap_x), y(p.umap_y)])
+        const hull = d3.polygonHull(hullPoints)
+        if (hull) {
+          g.append('path')
+            .attr('d', `M${hull.join('L')}Z`)
+            .attr('fill', color(cid))
+            .attr('fill-opacity', selectedCluster === null ? 0.06 : (selectedCluster === cid ? 0.12 : 0.02))
+            .attr('stroke', color(cid))
+            .attr('stroke-opacity', selectedCluster === null ? 0.2 : (selectedCluster === cid ? 0.4 : 0.05))
+            .attr('stroke-width', 1)
+            .style('cursor', 'pointer')
+            .on('click', () => {
+              if (onSelectCluster) onSelectCluster(selectedCluster === cid ? null : cid)
+            })
+        }
+      }
+    })
+
     // Tooltip
-    const tooltip = d3.select('body').append('div')
-      .style('position', 'absolute')
-      .style('background', '#1e293b')
-      .style('border', '1px solid #475569')
-      .style('border-radius', '6px')
-      .style('padding', '8px 12px')
-      .style('font-size', '12px')
-      .style('color', '#e2e8f0')
-      .style('pointer-events', 'none')
-      .style('opacity', 0)
-      .style('z-index', 1000)
+    if (!tooltipRef.current) {
+      tooltipRef.current = d3.select('body').append('div')
+        .style('position', 'absolute')
+        .style('background', '#1e293b')
+        .style('border', '1px solid #475569')
+        .style('border-radius', '6px')
+        .style('padding', '8px 12px')
+        .style('font-size', '12px')
+        .style('color', '#e2e8f0')
+        .style('pointer-events', 'none')
+        .style('opacity', 0)
+        .style('z-index', 1000)
+        .style('max-width', '300px')
+    }
+    const tooltip = tooltipRef.current
 
     // Draw points
     const nodes = g.selectAll('.point')
@@ -58,8 +107,8 @@ export default function ClusterMap({ points, clusters, selectedCluster }) {
       .attr('class', 'point')
       .attr('transform', d => `translate(${x(d.umap_x)},${y(d.umap_y)})`)
       .style('opacity', d =>
-        selectedCluster === null ? 0.8 :
-        d.cluster_id === selectedCluster ? 1 : 0.15
+        selectedCluster === null ? 0.85 :
+        d.cluster_id === selectedCluster ? 1 : 0.1
       )
       .style('cursor', 'pointer')
 
@@ -70,92 +119,106 @@ export default function ClusterMap({ points, clusters, selectedCluster }) {
 
       if (shape === 'triangle') {
         node.append('path')
-          .attr('d', d3.symbol().type(d3.symbolTriangle).size(60)())
+          .attr('d', d3.symbol().type(d3.symbolTriangle).size(80)())
           .attr('fill', c)
           .attr('stroke', '#0f172a')
           .attr('stroke-width', 1)
       } else if (shape === 'star') {
         node.append('path')
-          .attr('d', d3.symbol().type(d3.symbolStar).size(70)())
+          .attr('d', d3.symbol().type(d3.symbolStar).size(90)())
           .attr('fill', c)
           .attr('stroke', '#0f172a')
           .attr('stroke-width', 1)
       } else {
         node.append('circle')
-          .attr('r', 4)
+          .attr('r', 5)
           .attr('fill', c)
           .attr('stroke', '#0f172a')
           .attr('stroke-width', 1)
       }
     })
 
-    // Hover events
+    // Hover
     nodes
       .on('mouseover', function(event, d) {
         d3.select(this).style('opacity', 1).raise()
+        const cName = clusterNameMap[d.cluster_id] || `Cluster ${d.cluster_id}`
         tooltip
           .style('opacity', 1)
           .html(`
-            <strong>${d.title || 'Untitled'}</strong><br/>
-            <span style="color:#94a3b8">Venue: ${d.venue || 'N/A'}</span><br/>
-            <span style="color:#94a3b8">Filter: ${d.passed_by || 'N/A'}</span>
+            <div style="font-weight:600;margin-bottom:4px">${d.title || 'Untitled'}</div>
+            <div style="color:#60a5fa;font-size:11px;margin-bottom:2px">${cName}</div>
+            <div style="color:#94a3b8;font-size:11px">
+              ${d.venue ? `Venue: ${d.venue}` : ''}
+              ${d.passed_by ? ` | ${d.passed_by}` : ''}
+            </div>
           `)
-          .style('left', (event.pageX + 12) + 'px')
-          .style('top', (event.pageY - 10) + 'px')
+          .style('left', (event.pageX + 14) + 'px')
+          .style('top', (event.pageY - 14) + 'px')
       })
       .on('mousemove', function(event) {
         tooltip
-          .style('left', (event.pageX + 12) + 'px')
-          .style('top', (event.pageY - 10) + 'px')
+          .style('left', (event.pageX + 14) + 'px')
+          .style('top', (event.pageY - 14) + 'px')
       })
       .on('mouseout', function(event, d) {
         d3.select(this).style('opacity',
-          selectedCluster === null ? 0.8 :
-          d.cluster_id === selectedCluster ? 1 : 0.15
+          selectedCluster === null ? 0.85 :
+          d.cluster_id === selectedCluster ? 1 : 0.1
         )
         tooltip.style('opacity', 0)
       })
 
-    // Legend
-    const legend = svg.append('g')
-      .attr('transform', `translate(${width - 100}, 10)`)
+    // Draw cluster name labels at centroids
+    clusterIds.forEach(cid => {
+      const cent = centroids[cid]
+      if (!cent) return
+      const name = clusterNameMap[cid] || `Cluster ${cid}`
+      // Truncate long names
+      const shortName = name.length > 25 ? name.slice(0, 22) + '...' : name
 
-    const legendItems = [
-      { shape: 'circle', label: 'Top Venue' },
-      { shape: 'triangle', label: 'High Velocity' },
-      { shape: 'star', label: 'Manual' },
-    ]
+      const labelG = g.append('g')
+        .attr('transform', `translate(${x(cent.x)},${y(cent.y)})`)
+        .style('pointer-events', 'none')
+        .style('opacity', selectedCluster === null ? 0.9 : (selectedCluster === cid ? 1 : 0.15))
 
-    legendItems.forEach((item, i) => {
-      const lg = legend.append('g')
-        .attr('transform', `translate(0, ${i * 18})`)
+      // Background rect
+      labelG.append('rect')
+        .attr('x', -4)
+        .attr('y', -14)
+        .attr('width', shortName.length * 5.5 + 16)
+        .attr('height', 18)
+        .attr('rx', 3)
+        .attr('fill', '#0f172a')
+        .attr('fill-opacity', 0.85)
+        .attr('stroke', color(cid))
+        .attr('stroke-opacity', 0.5)
 
-      if (item.shape === 'circle') {
-        lg.append('circle').attr('r', 4).attr('cx', 4).attr('cy', 0).attr('fill', '#94a3b8')
-      } else if (item.shape === 'triangle') {
-        lg.append('path')
-          .attr('d', d3.symbol().type(d3.symbolTriangle).size(50)())
-          .attr('transform', 'translate(4,0)')
-          .attr('fill', '#94a3b8')
-      } else {
-        lg.append('path')
-          .attr('d', d3.symbol().type(d3.symbolStar).size(50)())
-          .attr('transform', 'translate(4,0)')
-          .attr('fill', '#94a3b8')
-      }
-
-      lg.append('text')
-        .attr('x', 14)
-        .attr('y', 4)
-        .attr('fill', '#64748b')
-        .attr('font-size', '10px')
-        .text(item.label)
+      labelG.append('text')
+        .attr('x', 4)
+        .attr('y', 0)
+        .attr('fill', color(cid))
+        .attr('font-size', '11px')
+        .attr('font-weight', 600)
+        .text(`${shortName} (${cent.count})`)
     })
 
     return () => {
-      tooltip.remove()
+      if (tooltipRef.current) {
+        tooltipRef.current.style('opacity', 0)
+      }
     }
-  }, [points, clusters, selectedCluster])
+  }, [points, clusters, selectedCluster, onSelectCluster])
+
+  // Cleanup tooltip on unmount
+  useEffect(() => {
+    return () => {
+      if (tooltipRef.current) {
+        tooltipRef.current.remove()
+        tooltipRef.current = null
+      }
+    }
+  }, [])
 
   return (
     <svg

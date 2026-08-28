@@ -10,37 +10,8 @@ const stepColors = {
   error: '#ef4444',
 }
 
-export default function ProgressLog({ logs, running, onEvent }) {
+export default function ProgressLog({ logs, running }) {
   const logEndRef = useRef(null)
-  const eventSourceRef = useRef(null)
-
-  useEffect(() => {
-    if (!running) {
-      if (eventSourceRef.current) {
-        eventSourceRef.current.close()
-        eventSourceRef.current = null
-      }
-      return
-    }
-
-    const es = new EventSource('/api/progress')
-    eventSourceRef.current = es
-
-    es.addEventListener('progress', (e) => {
-      try {
-        const data = JSON.parse(e.data)
-        onEvent(data)
-      } catch {}
-    })
-
-    es.onerror = () => {
-      es.close()
-    }
-
-    return () => {
-      es.close()
-    }
-  }, [running])
 
   useEffect(() => {
     logEndRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -72,7 +43,7 @@ export default function ProgressLog({ logs, running, onEvent }) {
 
       {/* Step indicators */}
       <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem' }}>
-        {steps.map((step, i) => {
+        {steps.map((step) => {
           let status = 'pending'
           const stepLogs = logs.filter(l => l.step === step)
           if (stepLogs.some(l => l.status === 'done')) status = 'done'
